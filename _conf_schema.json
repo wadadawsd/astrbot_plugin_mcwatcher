@@ -1,15 +1,22 @@
 {
-  "poll_seconds": { "type": "integer", "default": 120, "title": "轮询间隔（秒）" },
-  "timezone": { "type": "string", "default": "Asia/Ho_Chi_Minh", "title": "推送时间时区" },
+  "interval_seconds": {
+    "type": "int",
+    "default": 300,
+    "title": "自动轮询间隔（秒）"
+  },
+  "timezone": {
+    "type": "string",
+    "default": "Asia/Shanghai",
+    "title": "推送时间时区"
+  },
   "watch_channels": {
-    "type": "array",
+    "type": "list",
     "default": ["snapshot"],
-    "title": "监听类型",
-    "items": { "type": "string", "enum": ["snapshot", "release"] }
+    "title": "监听类型（snapshot/release）"
   },
   "mc_article_lang": {
     "type": "string",
     "default": "en-us",
-    "title": "Minecraft 文章语言段（en-us / zh-hans 等）"
+    "title": "Minecraft 文章语言段（en-us/zh-hans 等）"
   }
 }
