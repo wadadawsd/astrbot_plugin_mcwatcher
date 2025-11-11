@@ -1,43 +1,38 @@
 import asyncio
 import json
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional
 
 import httpx
-
-# AstrBot API（v3/v4系）
 from astrbot.api.all import (
     register, command, Context, Star, AstrMessageEvent,
     MessageChain, Plain, logger
 )
-# 持久化目录工具（来自知识库插件用法）
-from astrbot.api.star import StarTools  # 提供 get_data_dir() 等工具  # noqa
+from astrbot.api.star import StarTools
 
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+
 
 def _ts():
     return datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
 
+
 def format_article_url(lang: str, version_id: str) -> str:
-    """
-    仅对 snapshot（如 25w45a）拼出官方文章链接：
-    https://www.minecraft.net/{lang}/article/minecraft-snapshot-25w45a
-    对于 release（1.xx.x）官方文章标题不一定统一，这里先不强拼。
-    """
     vid = version_id.lower()
-    if any(tag in vid for tag in ["w", "pre", "rc"]):  # 25w45a / 1.21-pre1 / 1.21-rc1
+    if any(tag in vid for tag in ["w", "pre", "rc"]):
         slug = vid.replace(" ", "").replace("_", "-")
         return f"https://www.minecraft.net/{lang}/article/minecraft-snapshot-{slug}"
     return ""
+
 
 class State:
     def __init__(self, path: Path):
         self.path = path
         self.last_snapshot_id: Optional[str] = None
         self.last_release_id: Optional[str] = None
-        self.targets: set[str] = set()  # unified_msg_origin 列表
+        self.targets: set[str] = set()
         self.etag: Optional[str] = None
 
     def load(self):
@@ -60,35 +55,47 @@ class State:
         }
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
 
+
 @register(
     "astrbot_plugin_mcwatcher", "you",
     "自动监听 Minecraft 版本更新并转发（支持 snapshot / release）",
-    "0.1.0", "https://example.com/your-repo"
+    "0.2.0", "https://github.com/you/astrbot_plugin_mcwatcher"
 )
 class MCWatcher(Star):
-    def __init__(self, context: Context):
-        super().__init__(context)
+    def __init__(self, context: Context, config: Optional[Dict[str, Any]] = None, **kwargs):
+        try:
+            super().__init__(context, config)
+        except TypeError:
+            super().__init__(context)
+
         self.ctx = context
+        self.config = config or {}
 
-        # 读取配置（无则使用默认）
-        self.poll_seconds: int = int(context.get("poll_seconds", 120))
-        self.tz_name: str = context.get("timezone", "Asia/Ho_Chi_Minh")
-        self.watch_channels: set[str] = set(context.get("watch_channels", ["snapshot"]))
-        self.article_lang: str = context.get("mc_article_lang", "en-us")
+        # 统一配置读取函数
+        def cfg(key: str, default):
+            if isinstance(self.config, dict):
+                return self.config.get(key, default)
+            get_func = getattr(self.config, "get", None)
+            if callable(get_func):
+                return self.config.get(key, default)
+            return default
 
-        # 持久化目录
+        # 从配置读取参数
+        self.poll_seconds = int(cfg("interval_seconds", cfg("poll_seconds", 120)))
+        self.tz_name = cfg("timezone", "Asia/Shanghai")
+        self.watch_channels = set(cfg("watch_channels", ["snapshot"]))
+        self.article_lang = cfg("mc_article_lang", "en-us")
+
         data_dir = Path(StarTools.get_data_dir("astrbot_plugin_mcwatcher"))
         data_dir.mkdir(parents=True, exist_ok=True)
         self.state = State(data_dir / "state.json")
         self.state.load()
 
-        # 异步轮询任务
         self._stop = False
         self._task = asyncio.create_task(self._poll_loop())
         logger.info(f"{_ts()} MCWatcher started. interval={self.poll_seconds}s tz={self.tz_name} watch={self.watch_channels}")
 
     async def terminate(self):
-        # 插件卸载时会调用
         self._stop = True
         try:
             if self._task:
@@ -98,7 +105,6 @@ class MCWatcher(Star):
         self.state.save()
         logger.info(f"{_ts()} MCWatcher terminated.")
 
-    # ============ 指令：绑定/解绑/状态/立即检查 ============
     @command("mcwatch bind", alias={"mcwatch on", "mc订阅"})
     async def bind_here(self, event: AstrMessageEvent):
         sid = event.unified_msg_origin
@@ -129,14 +135,11 @@ class MCWatcher(Star):
         await self._check_once(force_push=True)
         yield event.plain_result("OK，已主动检查一次。")
 
-    # ================= 核心：轮询 + 检查 ===================
     async def _poll_loop(self):
-        # 首次启动立即检查一次，然后按间隔轮询
         try:
             await self._check_once(force_push=False)
         except Exception as e:
             logger.warning(f"MCWatcher first check failed: {e}", exc_info=True)
-
         while not self._stop:
             try:
                 await asyncio.sleep(self.poll_seconds)
@@ -150,11 +153,10 @@ class MCWatcher(Star):
         headers = {}
         if self.state.etag:
             headers["If-None-Match"] = self.state.etag
-
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(MANIFEST_URL, headers=headers)
             if resp.status_code == 304:
-                return None  # 未变化
+                return None
             resp.raise_for_status()
             etag = resp.headers.get("ETag")
             if etag:
@@ -165,11 +167,9 @@ class MCWatcher(Star):
     async def _check_once(self, force_push: bool):
         data = await self._fetch_manifest()
         if data is None and not force_push:
-            # 未变化
             return
 
         latest = (data or {}).get("latest", {}) if data else {}
-        # 读取最新 snapshot / release（两个都可监听）
         updated_msgs = []
 
         if "snapshot" in self.watch_channels:
@@ -199,7 +199,6 @@ class MCWatcher(Star):
         return None
 
     def _build_message(self, vtype: str, vid: str, release_iso: Optional[str]) -> str:
-        # 格式化时间
         dt_str = "未知时间"
         if release_iso:
             try:
@@ -207,10 +206,7 @@ class MCWatcher(Star):
                 dt_str = dt.strftime("%Y-%m-%d %H:%M:%S %z")
             except Exception:
                 dt_str = release_iso
-
-        # 文章链接（优先为 snapshot 场景生成）
         article = format_article_url(self.article_lang, vid) if vtype == "snapshot" else ""
-
         lines = [f"发现MC更新：{vid} ({vtype})", f"时间：{dt_str}"]
         if article:
             lines.append(f"Changelog：{article}")
@@ -229,3 +225,4 @@ class MCWatcher(Star):
             except Exception as e:
                 logger.warning(f"send to {sid} failed: {e}", exc_info=True)
         logger.info(f"{_ts()} MCWatcher pushed to {ok}/{len(targets)} targets.")
+
