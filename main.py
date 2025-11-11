@@ -59,10 +59,11 @@ class State:
 @register(
     "astrbot_plugin_mcwatcher", "you",
     "自动监听 Minecraft 版本更新并转发（支持 snapshot / release）",
-    "0.2.0", "https://github.com/you/astrbot_plugin_mcwatcher"
+    "0.2.1", "https://github.com/you/astrbot_plugin_mcwatcher"
 )
 class MCWatcher(Star):
     def __init__(self, context: Context, config: Optional[Dict[str, Any]] = None, **kwargs):
+        # 兼容不同 AstrBot 版本的 Star.__init__ 签名
         try:
             super().__init__(context, config)
         except TypeError:
@@ -105,6 +106,7 @@ class MCWatcher(Star):
         self.state.save()
         logger.info(f"{_ts()} MCWatcher terminated.")
 
+    # ========== 指令 ==========
     @command("mcwatch bind", alias={"mcwatch on", "mc订阅"})
     async def bind_here(self, event: AstrMessageEvent):
         sid = event.unified_msg_origin
@@ -135,6 +137,24 @@ class MCWatcher(Star):
         await self._check_once(force_push=True)
         yield event.plain_result("OK，已主动检查一次。")
 
+    # 开发/调试：模拟推送（无需改 state.json）
+    @command("mcwatch fake")
+    async def fake_snapshot(self, event: AstrMessageEvent):
+        parts = (event.plain_text or "").strip().split()
+        vid = parts[1] if len(parts) > 1 else "25w45a"
+        msg = self._build_message("snapshot", vid, datetime.now().isoformat())
+        await self._broadcast(msg, self.state.targets)
+        yield event.plain_result(f"已模拟 snapshot 推送：{vid}")
+
+    @command("mcwatch fake_release")
+    async def fake_release(self, event: AstrMessageEvent):
+        parts = (event.plain_text or "").strip().split()
+        vid = parts[1] if len(parts) > 1 else "1.21.3"
+        msg = self._build_message("release", vid, datetime.now().isoformat())
+        await self._broadcast(msg, self.state.targets)
+        yield event.plain_result(f"已模拟 release 推送：{vid}")
+
+    # ========== 轮询 ==========
     async def _poll_loop(self):
         try:
             await self._check_once(force_push=False)
@@ -149,10 +169,12 @@ class MCWatcher(Star):
             except Exception as e:
                 logger.warning(f"MCWatcher loop error: {e}", exc_info=True)
 
-    async def _fetch_manifest(self) -> Optional[Dict[str, Any]]:
+    # === 补丁：支持忽略缓存，避免 304 导致 latest 为空 ===
+    async def _fetch_manifest(self, ignore_cache: bool = False) -> Optional[Dict[str, Any]]:
         headers = {}
-        if self.state.etag:
+        if (not ignore_cache) and self.state.etag:
             headers["If-None-Match"] = self.state.etag
+
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(MANIFEST_URL, headers=headers)
             if resp.status_code == 304:
@@ -165,7 +187,8 @@ class MCWatcher(Star):
             return resp.json()
 
     async def _check_once(self, force_push: bool):
-        data = await self._fetch_manifest()
+        # 补丁：强制检查时忽略缓存，确保拿到 latest
+        data = await self._fetch_manifest(ignore_cache=force_push)
         if data is None and not force_push:
             return
 
@@ -220,9 +243,12 @@ class MCWatcher(Star):
         ok = 0
         for sid in list(targets):
             try:
-                sent = self.ctx.send_message(sid, mc)
-                ok += 1 if sent else 0
+                ret = self.ctx.send_message(sid, mc)
+                if asyncio.iscoroutine(ret):
+                    await ret
+                ok += 1
             except Exception as e:
                 logger.warning(f"send to {sid} failed: {e}", exc_info=True)
         logger.info(f"{_ts()} MCWatcher pushed to {ok}/{len(targets)} targets.")
+
 
