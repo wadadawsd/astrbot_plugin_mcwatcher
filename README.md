@@ -23,20 +23,13 @@
    ```
    https://github.com/wadadawsd/astrbot_plugin_mcwatcher.git
    ```
-
-2. 安装后插件会自动启动，日志中出现类似：
-   ```
-   MCWatcher started. interval=300s tz=Asia/Shanghai watch={'snapshot'}
-   ```
-   即代表加载成功。
-
-3. 在你希望接收推送的群或私聊中输入：
+2. 在你希望接收推送的群或私聊中输入：
    ```
    mcwatch bind
    ```
    绑定成功后，这个会话就会在每次 Minecraft 更新时收到推送。
 
-4. 可用命令如下：
+3. 可用命令如下：
    ```
    mcwatch bind              绑定当前会话
    mcwatch unbind            取消绑定
@@ -54,13 +47,13 @@
    mcwatch fake_release 1.21.3
    ```
 
-5. 插件会定时访问 Mojang 官方接口：
+4. 插件会定时访问 Mojang 官方接口：
    ```
    https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
    ```
    检测新版本发布后自动发送消息，包括版本号、发布时间和官网更新链接。
 
-6. 如果出现提示：
+5. 如果出现提示：
    ```
    MCWatcher: 无推送目标，跳过广播。
    ```
@@ -76,9 +69,3 @@
 | mc_article_lang | en-us | 官方文章语言，如 zh-hans、en-us 等 |
 
 ---
-
-作者：[wadadawsd](https://github.com/wadadawsd)  
-许可证：MIT  
-版本：v0.2.2  
-仓库地址：[https://github.com/wadadawsd/astrbot_plugin_mcwatcher](https://github.com/wadadawsd/astrbot_plugin_mcwatcher)
-
