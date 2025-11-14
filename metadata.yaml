@@ -1,6 +1,6 @@
 name: "astrbot_plugin_mcwatcher"
 display_name: "MCWatcher（Minecraft 更新推送）"
-desc: "MCWatcher 是一个基于 AstrBot 的插件，用于 自动监测 Mojang 的最新 Minecraft 版本（Snapshot &"
+desc: "MCWatcher 是一个基于 AstrBot 的插件，用于 自动监测 Mojang 的最新 Minecraft 版本"
 version: "0.2.0"
 author: "noname2309-bot"
 repo: "https://github.com/wadadawsd/astrbot_plugin_mcwatcher"
@@ -13,4 +13,5 @@ tags:
   - release
   - auto-update
 entrypoint: "main.py"
+
 
