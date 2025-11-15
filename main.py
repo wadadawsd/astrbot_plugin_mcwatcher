@@ -67,7 +67,7 @@ class State:
     "astrbot_plugin_mcwatcher",
     "noname2309-bot",
     "MCWatcher 是一个基于 AstrBot 的插件，用于 自动监测 Mojang 的最新 Minecraft 版本",
-    "0.2.3",
+    "0.2.4",
     "https://github.com/wadadawsd/astrbot_plugin_mcwatcher"
 )
 class MCWatcher(Star):
@@ -75,13 +75,12 @@ class MCWatcher(Star):
     def __init__(self, context: Context, config: Optional[Dict[str, Any]] = None, **kwargs):
         super().__init__(context)
 
-        # ★ 修复项 2：确保 config 一定是 dict
+        # 保证 config 必为 dict
         self.config: Dict[str, Any] = config or {}
+        self.ctx = context
 
         def cfg(key: str, default):
             return self.config.get(key, default)
-
-        self.ctx = context
 
         self.poll_seconds = int(cfg("interval_seconds", cfg("poll_seconds", 120)))
         self.tz_name = cfg("timezone", "Asia/Shanghai")
@@ -97,7 +96,9 @@ class MCWatcher(Star):
         self._stop = False
         self._task = asyncio.create_task(self._poll_loop())
 
-        logger.info(f"{_ts()} MCWatcher started. interval={self.poll_seconds}s tz={self.tz_name} watch={self.watch_channels}")
+        logger.info(
+            f"{_ts()} MCWatcher started. interval={self.poll_seconds}s tz={self.tz_name} watch={self.watch_channels}"
+        )
 
     async def terminate(self):
         self._stop = True
@@ -109,42 +110,42 @@ class MCWatcher(Star):
                 pass
         self.state.save()
 
-    # ========= 工具 =========
+    # ========== 工具 ==========
 
-    # ★ 修复项 3：捕获更具体的异常
     def _get_plain_text(self, event: AstrMessageEvent) -> str:
+        """提取消息纯文本，捕获更具体异常"""
         try:
             mc = getattr(event, "message_chain", None)
-            parts = []
             if mc:
+                parts = []
                 for seg in mc:
                     if isinstance(seg, Plain):
                         parts.append(getattr(seg, "text", "") or getattr(seg, "content", ""))
-            return "".join(parts)
+                return "".join(parts)
         except (AttributeError, TypeError) as e:
             logger.warning(f"Failed to parse plain text: {e}", exc_info=True)
         return ""
 
-    # ========= 辅助函数 =========
-
-    # ★ 修复项 1：避免 toks[1] 返回 “fake”
     def _parse_fake_version(self, raw: str, keyword: str, default_vid: str) -> str:
+        """更健壮的 fake 参数解析"""
         toks = raw.replace("\u3000", " ").split()
-        for i, t in enumerate(toks):
-            if t.lower() == keyword:
-                # 返回 keyword 后面的内容
-                return toks[i + 1] if i + 1 < len(toks) else default_vid
+        tokens_lower = [t.lower() for t in toks]
 
-        # 额外修复：
-        # 如果命令只有 "mcwatch fake" → 不返回 toks[1]（它是 'fake'）
-        # 必须使用 default_vid
+        # 形如：mcwatch fake 25w45a
+        if keyword in tokens_lower:
+            idx = tokens_lower.index(keyword)
+            if idx + 1 < len(toks):
+                return toks[idx + 1]
+            return default_vid
+
+        # 避免返回 toks[1] == "fake"
         if len(toks) <= 2:
             return default_vid
 
-        # 形如 "mcwatch fake 25w45a" 的情形
+        # 假如输入：mcwatch fake 25w45a → 一般 toks[2] 为版本号
         return toks[2]
 
-    # ========= 指令 =========
+    # ========== 指令 ==========
 
     @command("mcwatch bind", alias={"mcwatch on", "mc订阅"})
     async def bind_here(self, event: AstrMessageEvent):
@@ -175,12 +176,17 @@ class MCWatcher(Star):
         await self._check_once(force_push=True)
         yield event.plain_result("OK，已主动检查一次。")
 
+    # === fake 推送（仅当前会话，不广播） ===
+
     @command("mcwatch fake")
     async def fake_snapshot(self, event: AstrMessageEvent):
         raw = self._get_plain_text(event).strip()
         vid = self._parse_fake_version(raw, "fake", "25w45a")
         msg = self._build_message("snapshot", vid, datetime.now().isoformat())
-        await self._broadcast(msg, self.state.targets)
+
+        # 修复：只发到当前会话，不广播
+        await self.ctx.send_message(event.unified_msg_origin, MessageChain([Plain(msg)]))
+
         yield event.plain_result(f"已模拟 snapshot 推送：{vid}")
 
     @command("mcwatch fake_release")
@@ -188,21 +194,24 @@ class MCWatcher(Star):
         raw = self._get_plain_text(event).strip()
         vid = self._parse_fake_version(raw, "fake_release", "1.21.3")
         msg = self._build_message("release", vid, datetime.now().isoformat())
-        await self._broadcast(msg, self.state.targets)
+
+        # 修复：只发到当前会话，不广播
+        await self.ctx.send_message(event.unified_msg_origin, MessageChain([Plain(msg)]))
+
         yield event.plain_result(f"已模拟 release 推送：{vid}")
 
-    # ========= 轮询 =========
+    # ========== 轮询 ==========
 
     async def _poll_loop(self):
         try:
-            await self._check_once(False)
+            await self._check_once(force_push=False)
         except Exception as e:
             logger.warning(f"MCWatcher 首次检查异常：{e}", exc_info=True)
 
         while not self._stop:
             try:
                 await asyncio.sleep(self.poll_seconds)
-                await self._check_once(False)
+                await self._check_once(force_push=False)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -215,6 +224,7 @@ class MCWatcher(Star):
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(MANIFEST_URL, headers=headers)
+
             if resp.status_code == 304:
                 return None
 
@@ -265,7 +275,9 @@ class MCWatcher(Star):
         dt_str = "未知时间"
         if release_iso:
             try:
-                dt = datetime.fromisoformat(release_iso.replace("Z", "+00:00")).astimezone(ZoneInfo(self.tz_name))
+                dt = datetime.fromisoformat(
+                    release_iso.replace("Z", "+00:00")
+                ).astimezone(ZoneInfo(self.tz_name))
                 dt_str = dt.strftime("%Y-%m-%d %H:%M:%S %z")
             except (ValueError, ZoneInfoNotFoundError):
                 dt_str = release_iso
@@ -281,7 +293,8 @@ class MCWatcher(Star):
 
         return "\n".join(lines)
 
-    # ========= 高性能并发广播 =========
+    # ========== 高性能并发广播（正式推送） ==========
+
     async def _broadcast(self, text: str, targets: Set[str]):
         if not targets:
             return
